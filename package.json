@@ -13,6 +13,10 @@
       {
         "command": "cliHelper.generateCLICommand",
         "title": "CLI: Generate Command Stub"
+      },
+      {
+        "command": "cliHelper.copyArgParsingResources",
+        "title": "CLI: Copy Argument Parsing Resources"
       }
     ],
     "configuration": {
@@ -41,8 +45,11 @@
         }
       }
     }
-
   },
+  "files": [
+    "resources/cli_args.c",
+    "resources/cli_args.h"
+  ],
   "scripts": {
     "vscode:prepublish": "npx vsce package"
   },

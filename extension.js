@@ -1,112 +1,53 @@
-// VSCode Extension Entry Point for CLI Command Generator (Webview Version)
-
 const vscode = require('vscode');
+const path = require('path');
+const fs = require('fs');
 
-/**
- * @param {vscode.ExtensionContext} context
- */
 function activate(context) {
-  let disposable = vscode.commands.registerCommand('cliHelper.generateCLICommand', function () {
+  // Command to generate CLI command stub
+  let generateDisposable = vscode.commands.registerCommand('cliHelper.generateCLICommand', () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showErrorMessage('No active editor found.');
+      return;
+    }
+
+    // Save the current cursor position and document URI
+    const cursorPos = editor.selection.active;
+    const targetUri = editor.document.uri;
+
+    // Create and show a new Webview panel
     const panel = vscode.window.createWebviewPanel(
-      'cliCommandForm',
-      'Generate CLI Command',
+      'cliHelper',
+      'CLI Command Generator',
       vscode.ViewColumn.One,
       {
         enableScripts: true,
-        retainContextWhenHidden: true
+        localResourceRoots: [
+          vscode.Uri.file(path.join(context.extensionPath, 'resources'))
+        ]
       }
     );
 
-    const contextTypesKey = 'cliHelper.customArgTypes';
-    const config = vscode.workspace.getConfiguration('cliHelper');
-    const previousCustomTypes = context.globalState.get(contextTypesKey, []);
+    panel.webview.html = getWebviewContent();
 
-    panel.webview.html = getWebviewContent(previousCustomTypes);
-
+    // Listen for messages from the Webview
     panel.webview.onDidReceiveMessage(
       message => {
         if (message.command === 'generate') {
-          const returnType = config.get('returnType') || 'AppStatus_t';
-          const printFunc = config.get('printFunction') || 'printf';
-          const defaultStatus = config.get('defaultStatusValue') || 'APPERR_OK';
-          const statusOnArgError = config.get('statusOnArgumentError') || 'APPERR_BAD_ARGUMENT';
+          const commandData = message.data;
+          const generatedCode = generateCLICommandCode(commandData);
 
-          const { groupName, briefDesc, funcName, args } = message.data;
-
-          const usageArgs = args.map(a => `<${a.name}>`).join(' ');
-          const paramDocs = args.map(a => ` *   - \`${a.name}\` - ${a.desc}`).join('\n');
-          const enumLines = args.map(a => `        ARG_${a.name},`).join('\n');
-          const printfArgs = args.map(arg => `    ${printFunc}(\"  ${arg.name}: ${arg.desc}\\n\");`).join('\n');
-          const declarations = args.map(arg => `    ${arg.type} ${arg.name};`).join('\n');
-          const parsingComments = args.map(arg => `    // TODO: Parse argument '${arg.name}' - ${arg.desc}`).join('\n');
-
-          const code = `/**
- * @ingroup ${groupName}
- * @brief ${briefDesc}
- *
- * **Usage:**
- * \`\`\`
- * ${funcName} ${usageArgs}
- * \`\`\`
- *
- * @param argc Number of arguments (should be ${args.length})
- * @param argv Argument list:
-${paramDocs}
- *
- * @return ${returnType} Error code (APPERR_OK on success)
- */
-${returnType} ${funcName}(int argc, char **argv) {
-    ${returnType} status = ${defaultStatus};
-
-    enum {
-        ARG_help = -1,
-${enumLines}
-        ARG_num_of_args
-    };
-
-    if (argc <= ARG_help) {
-        goto print_help;
-    }
-
-    if (argc != ARG_num_of_args) {
-        status = ${statusOnArgError};
-        ${printFunc}(\"Invalid argument count! Expected %d, got %d\\n\", ARG_num_of_args, argc);
-        goto print_help;
-    }
-
-${declarations}
-
-${parsingComments}
-
-    // ===================================
-    // TODO: Implement core command logic
-    // ===================================
-
-    goto done;
-
-print_help:
-    ${printFunc}(\"${briefDesc}\\n\");
-    ${printFunc}(\"Usage: ${funcName} ${usageArgs}\\n\");
-${printfArgs}
-
-done:
-    return status;
-}`;
-
-          const editor = vscode.window.activeTextEditor;
-          if (editor) {
-            editor.edit(editBuilder => {
-              editBuilder.insert(editor.selection.active, code + '\n');
+          // Re-open the document from its URI and insert the generated code at the saved cursor position
+          vscode.workspace.openTextDocument(targetUri).then(document => {
+            vscode.window.showTextDocument(document).then(editor => {
+              editor.edit(editBuilder => {
+                editBuilder.insert(cursorPos, generatedCode);
+              });
             });
-          } else {
-            vscode.window.showInformationMessage('No active editor found to insert generated code.');
-          }
-        } else if (message.command === 'saveCustomType') {
-          const newType = message.customType;
-          if (!previousCustomTypes.includes(newType)) {
-            previousCustomTypes.push(newType);
-            context.globalState.update(contextTypesKey, previousCustomTypes);
-          }
+          });
+
+          vscode.window.showInformationMessage('CLI command generated!');
+          panel.dispose();
         }
       },
       undefined,
@@ -114,156 +55,245 @@ done:
     );
   });
 
-  context.subscriptions.push(disposable);
+  // Command to copy the argument parsing resources separately
+  let copyDisposable = vscode.commands.registerCommand('cliHelper.copyArgParsingResources', () => {
+    if (!vscode.workspace.rootPath) {
+      vscode.window.showErrorMessage('No workspace folder found.');
+      return;
+    }
+    const targetFolder = path.join(vscode.workspace.rootPath, 'src', 'cli_utils');
+    if (!fs.existsSync(targetFolder)) {
+      fs.mkdirSync(targetFolder, { recursive: true });
+    }
+    fs.copyFileSync(
+      path.join(context.extensionPath, 'resources', 'cli_args.h'),
+      path.join(targetFolder, 'cli_args.h')
+    );
+    fs.copyFileSync(
+      path.join(context.extensionPath, 'resources', 'cli_args.c'),
+      path.join(targetFolder, 'cli_args.c')
+    );
+    vscode.window.showInformationMessage('Argument parsing resources copied!');
+  });
+
+  context.subscriptions.push(generateDisposable);
+  context.subscriptions.push(copyDisposable);
 }
 
-function deactivate() {}
-
-function getWebviewContent(savedCustomTypes) {
-  const stdTypes = ["uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t", "uint64_t", "int64_t", "char*", "float", "double"];
-  const typeOptions = stdTypes.concat(savedCustomTypes).map(type => `<option value=\"${type}\">${type}</option>`).join('');
-
+function getWebviewContent() {
   return `
-  <!DOCTYPE html>
-  <html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CLI Command Form</title>
-    <style>
-      body { font-family: sans-serif; padding: 1rem; }
-      input, select { margin: 0.25rem 0.5rem 0.5rem 0; padding: 0.25rem; }
-      label { display: block; margin-top: 0.75rem; }
-      .arg { margin-bottom: 1rem; border-bottom: 1px dashed #ccc; padding-bottom: 0.5rem; }
-      button { margin-top: 0.5rem; }
-    </style>
-  </head>
-  <body>
-    <h2>CLI Command Generator</h2>
-    <form id="cli-form">
-      <label>Group Name: <input type="text" id="groupName"></label>
-      <label>Brief Description: <input type="text" id="briefDesc"></label>
-      <label>Function Name: <input type="text" id="funcName"></label>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <title>CLI Command Generator</title>
+    </head>
+    <body>
+      <h1>Generate CLI Command</h1>
+      <form id="cliForm">
+        <label>Group Name (@ingroup):</label><br>
+        <input type="text" name="groupName" required><br><br>
+        <label>Brief Description (@brief):</label><br>
+        <textarea name="briefDesc" required></textarea><br><br>
+        <label>Function Name:</label><br>
+        <input type="text" name="funcName" required><br><br>
 
-      <h3>Arguments</h3>
-      <div id="arg-list"></div>
-      <button type="button" onclick="addArg()">Add Argument</button>
-      <button type="submit">Generate</button>
-    </form>
+        <div id="arguments">
+          <h3>Arguments</h3>
+        </div>
+        <button type="button" id="addArg">Add Argument</button><br><br>
+        <button type="submit">Generate</button>
+      </form>
 
-    <script>
-      const vscode = acquireVsCodeApi();
+      <script>
+        const vscode = acquireVsCodeApi();
 
-      window.onload = () => {
-        document.getElementById('cli-form').addEventListener('submit', (e) => {
+        document.getElementById('addArg').addEventListener('click', () => {
+          const argDiv = document.createElement('div');
+          argDiv.innerHTML = \`
+            <hr>
+            <label>Argument Name:</label><br>
+            <input type="text" name="argName" required><br>
+            <label>Description:</label><br>
+            <input type="text" name="argDesc" required><br>
+            <label>Parser Type:</label><br>
+            <select name="argParser" class="argParser">
+              <option value="uint32">Unsigned Integer (32-bit)</option>
+              <option value="uint64">Unsigned Integer (64-bit)</option>
+              <option value="int">Signed Integer</option>
+              <option value="float">Floating Point</option>
+              <option value="hex">Hexadecimal</option>
+              <option value="bool">Boolean</option>
+              <option value="string">String Option Set</option>
+              <option value="ip">IPv4 Address</option>
+              <option value="ip_mask">IPv4 Address + Netmask</option>
+            </select><br>
+            <div class="parserParams"></div>
+            <button type="button" class="removeArg">Remove Argument</button><br>
+          \`;
+
+          const parserSelect = argDiv.querySelector('.argParser');
+          const paramsDiv = argDiv.querySelector('.parserParams');
+
+          function updateParams() {
+            const type = parserSelect.value;
+            paramsDiv.innerHTML = '';
+
+            if (["uint32", "uint64", "int", "float", "hex"].includes(type)) {
+              paramsDiv.innerHTML += \`
+                <label>Min Value:</label><br>
+                <input type="number" name="argMin"><br>
+                <label>Max Value:</label><br>
+                <input type="number" name="argMax"><br>
+              \`;
+            } else if (type === "string") {
+              paramsDiv.innerHTML += \`
+                <label>Comma-separated Options:</label><br>
+                <input type="text" name="argOptions"><br>
+              \`;
+            }
+          }
+
+          parserSelect.addEventListener('change', updateParams);
+          updateParams();
+
+          document.getElementById('arguments').appendChild(argDiv);
+          argDiv.querySelector('.removeArg').addEventListener('click', () => argDiv.remove());
+        });
+
+        document.getElementById('cliForm').addEventListener('submit', (e) => {
           e.preventDefault();
-          const args = [...document.querySelectorAll('.arg')].map(div => {
-            const typeSelect = div.querySelector('.arg-type');
-            const customInput = div.querySelector('.arg-type-custom');
-            const type = typeSelect.value === 'custom' && customInput.value.trim()
-              ? customInput.value.trim()
-              : typeSelect.value;
-            return {
-              name: div.querySelector('.arg-name').value,
-              desc: div.querySelector('.arg-desc').value,
-              type
-            };
-          });
+          const formData = new FormData(e.target);
+          const argNames = formData.getAll('argName');
+          const args = [];
 
-          console.log("Sending message to extension:", args);
+          for (let i = 0; i < argNames.length; i++) {
+            args.push({
+              name: formData.getAll('argName')[i],
+              description: formData.getAll('argDesc')[i],
+              parser: formData.getAll('argParser')[i],
+              min: formData.getAll('argMin')[i] || null,
+              max: formData.getAll('argMax')[i] || null,
+              options: formData.getAll('argOptions')[i] || null
+            });
+          }
+
+          const data = {
+            groupName: formData.get('groupName'),
+            briefDesc: formData.get('briefDesc'),
+            funcName: formData.get('funcName'),
+            args: args
+          };
 
           vscode.postMessage({
             command: 'generate',
-            data: {
-              groupName: document.getElementById('groupName').value,
-              briefDesc: document.getElementById('briefDesc').value,
-              funcName: document.getElementById('funcName').value,
-              args
-            }
+            data: data
           });
         });
-      };
-
-      function addArg() {
-        const container = document.getElementById('arg-list');
-        const div = document.createElement('div');
-        div.className = 'arg';
-
-        const nameInput = document.createElement('input');
-        nameInput.className = 'arg-name';
-        nameInput.placeholder = 'Arg name';
-
-        const descInput = document.createElement('input');
-        descInput.className = 'arg-desc';
-        descInput.placeholder = 'Arg description';
-
-        const typeSelect = document.createElement('select');
-        typeSelect.className = 'arg-type';
-
-        const options = [
-          "uint8_t", "int8_t", "uint16_t", "int16_t", "uint32_t", "int32_t",
-          "uint64_t", "int64_t", "char*", "float", "double"
-        ];
-
-        options.forEach(type => {
-          const opt = document.createElement('option');
-          opt.value = type;
-          opt.text = type;
-          typeSelect.appendChild(opt);
-        });
-
-        const customOption = document.createElement('option');
-        customOption.value = 'custom';
-        customOption.text = '-- Custom --';
-        typeSelect.appendChild(customOption);
-
-        const customInput = document.createElement('input');
-        customInput.className = 'arg-type-custom';
-        customInput.placeholder = 'Custom type (optional)';
-        customInput.style.display = 'none';
-
-        const removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.textContent = 'Remove';
-        removeBtn.onclick = () => div.remove();
-
-        const br = document.createElement('br');
-
-        typeSelect.addEventListener('change', () => {
-          if (typeSelect.value === 'custom') {
-            customInput.style.display = 'inline-block';
-            customInput.focus();
-          } else {
-            customInput.style.display = 'none';
-          }
-        });
-
-        customInput.addEventListener('blur', () => {
-          const custom = customInput.value.trim();
-          if (custom) {
-            vscode.postMessage({ command: 'saveCustomType', customType: custom });
-            const option = document.createElement('option');
-            option.value = custom;
-            option.text = custom;
-            option.selected = true;
-            typeSelect.appendChild(option);
-            customInput.style.display = 'none';
-          }
-        });
-
-        div.appendChild(nameInput);
-        div.appendChild(descInput);
-        div.appendChild(typeSelect);
-        div.appendChild(customInput);
-        div.appendChild(removeBtn);
-        div.appendChild(br);
-        container.appendChild(div);
-      }
-    </script>
-  </body>
-  </html>
+      </script>
+    </body>
+    </html>
   `;
 }
+
+
+function generateCLICommandCode(data) {
+  const config = vscode.workspace.getConfiguration('cliHelper');
+  const returnType = config.get('returnType', 'int');
+  const defaultStatus = config.get('defaultStatusValue', '0');
+  const argErrorStatus = config.get('statusOnArgumentError', '-1');
+
+  const { groupName, briefDesc, funcName, args } = data;
+
+  let enumEntries = '';
+  let varDecls = '';
+  let parseCalls = '';
+  let argIndex = 1;
+
+  args.forEach(arg => {
+    const enumName = `ARG_${arg.name.toUpperCase()}`;
+    enumEntries += `    ${enumName},\n`;
+
+    let varType = '';
+    let parseLine = '';
+
+    switch (arg.parser) {
+      case 'uint32':
+        varType = 'CLIPAR_UINT32';
+        parseLine = `if (!parse_uint32_in_range(argv[${argIndex}], ${arg.min}, ${arg.max}, &${arg.name})) return ${argErrorStatus};`;
+        break;
+      case 'uint64':
+        varType = 'CLIPAR_UINT64';
+        parseLine = `if (!parse_uint64_in_range(argv[${argIndex}], ${arg.min}, ${arg.max}, &${arg.name})) return ${argErrorStatus};`;
+        break;
+      case 'int':
+        varType = 'CLIPAR_INT';
+        parseLine = `if (!parse_int_in_range(argv[${argIndex}], ${arg.min}, ${arg.max}, &${arg.name})) return ${argErrorStatus};`;
+        break;
+      case 'float':
+        varType = 'CLIPAR_FLOAT';
+        parseLine = `if (!parse_float_in_range(argv[${argIndex}], ${arg.min}, ${arg.max}, &${arg.name})) return ${argErrorStatus};`;
+        break;
+      case 'hex':
+        varType = 'CLIPAR_ULONG';
+        parseLine = `if (!parse_hex_in_range(argv[${argIndex}], ${arg.min}, ${arg.max}, &${arg.name})) return ${argErrorStatus};`;
+        break;
+      case 'bool':
+        varType = 'CLIPAR_BOOL';
+        parseLine = `if (!parse_bool(argv[${argIndex}], &${arg.name})) return ${argErrorStatus};`;
+        break;
+      case 'string':
+        varType = 'CLIPAR_UINT';
+        const options = arg.options.split(',').map(s => `"${s.trim()}"`).join(', ');
+        parseLine = `const char *${arg.name}_opts[] = { ${options} };
+    if (!parse_string_option(argv[${argIndex}], ${arg.name}_opts, sizeof(${arg.name}_opts)/sizeof(${arg.name}_opts[0]), &${arg.name})) return ${argErrorStatus};`;
+        break;
+      case 'ip':
+        parseLine = `if (!parse_ip_address(argv[${argIndex}])) return ${argErrorStatus}; // Manual IP storage required`;
+        break;
+      case 'ip_mask':
+        parseLine = `if (!parse_ip_address_with_netmask(argv[${argIndex}])) return ${argErrorStatus}; // Manual IP/mask storage required`;
+        break;
+    }
+
+    if (varType) {
+      varDecls += `    ${varType} ${arg.name};\n`;
+    }
+    parseCalls += `    ${parseLine}\n`;
+    argIndex++;
+  });
+
+  return `
+/**
+ * @ingroup ${groupName}
+ * @brief ${briefDesc}
+ * 
+ * @param argc Expected to be the number of arguments defined below + command name.
+ * @param argv Argument strings passed to the command.
+${args.map((arg, idx) => ` *   - argv[${idx + 1}]: ${arg.description}`).join('\n')}
+ */
+${returnType} ${funcName}(int argc, char **argv) {
+    #include "cli_args.h"
+    enum {
+${enumEntries}    ARG_COUNT
+    };
+
+    if (argc != ARG_COUNT) {
+        return ${argErrorStatus};
+    }
+
+${varDecls}
+${parseCalls}
+    // Command logic here
+
+    return ${defaultStatus};
+}
+`;
+}
+
+exports.activate = activate;
+
+function deactivate() {}
 
 module.exports = {
   activate,
