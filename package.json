@@ -1,0 +1,52 @@
+
+{
+  "name": "cli-helper-extension",
+  "displayName": "CLI Command Helper",
+  "description": "Generate structured CLI command stubs with Doxygen comments and validation.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cliHelper.generateCLICommand",
+        "title": "CLI: Generate Command Stub"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "CLI Helper",
+      "properties": {
+        "cliHelper.returnType": {
+          "type": "string",
+          "default": "int",
+          "description": "Return type used in generated CLI command functions"
+        },
+        "cliHelper.printFunction": {
+          "type": "string",
+          "default": "printf",
+          "description": "Function used to output help/usage text in generated CLI stubs"
+        },
+        "cliHelper.defaultStatusValue": {
+          "type": "string",
+          "default": "0",
+          "description": "Default value assigned to the status variable"
+        },
+        "cliHelper.statusOnArgumentError": {
+          "type": "string",
+          "default": "-1",
+          "description": "Status value set when argument count is incorrect"
+        }
+      }
+    }
+
+  },
+  "scripts": {
+    "vscode:prepublish": "npx vsce package"
+  },
+  "devDependencies": {
+    "vsce": "^2.15.0"
+  }
+}
